@@ -263,4 +263,31 @@ var _ = Describe("GitRepositoryReconciler", func() {
 			}),
 		)
 	})
+
+	Context("repositoryMetadata", func() {
+		const (
+			commit = "1ea9999c2ca070ccf4c9da7c20d68b7645863871"
+			branch = "main"
+		)
+		It("populates a map from the GitRepository", func() {
+			repo := sourcev1.GitRepository{
+				Spec: sourcev1.GitRepositorySpec{
+					URL:       "https://github.com/fluxcd/source-controller",
+					Interval:  metav1.Duration{Duration: indexInterval},
+					Reference: &sourcev1.GitRepositoryRef{Branch: "master"},
+				},
+				Status: sourcev1.GitRepositoryStatus{
+					Artifact: &sourcev1.Artifact{
+						Revision: fmt.Sprintf("%s/%s", branch, commit),
+					},
+				},
+			}
+			m := repositoryMetadata(repo)
+			Expect(m).To(Equal(map[string]string{
+				"repoURL": "https://github.com/fluxcd/source-controller",
+				"branch":  branch,
+				"commit":  commit,
+			}))
+		})
+	})
 })

@@ -137,14 +137,14 @@ func (r *GitRepositoryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, erro
 
 	// if reconciliation failed, record the failure and requeue immediately
 	if reconcileErr != nil {
-		r.event(reconciledRepository, events.EventSeverityError, reconcileErr.Error())
+		r.event(reconciledRepository, events.EventSeverityError, reconcileErr.Error(), repositoryMetadata(reconciledRepository))
 		r.recordReadiness(reconciledRepository)
 		return ctrl.Result{Requeue: true}, reconcileErr
 	}
 
 	// emit revision change event
 	if repository.Status.Artifact == nil || reconciledRepository.Status.Artifact.Revision != repository.Status.Artifact.Revision {
-		r.event(reconciledRepository, events.EventSeverityInfo, sourcev1.GitRepositoryReadyMessage(reconciledRepository))
+		r.event(reconciledRepository, events.EventSeverityInfo, sourcev1.GitRepositoryReadyMessage(reconciledRepository), nil)
 	}
 	r.recordReadiness(reconciledRepository)
 
@@ -270,7 +270,7 @@ func (r *GitRepositoryReconciler) reconcile(ctx context.Context, repository sour
 
 func (r *GitRepositoryReconciler) reconcileDelete(ctx context.Context, repository sourcev1.GitRepository) (ctrl.Result, error) {
 	if err := r.gc(repository); err != nil {
-		r.event(repository, events.EventSeverityError, fmt.Sprintf("garbage collection for deleted resource failed: %s", err.Error()))
+		r.event(repository, events.EventSeverityError, fmt.Sprintf("garbage collection for deleted resource failed: %s", err.Error()), nil)
 		// Return the error so we retry the failed garbage collection
 		return ctrl.Result{}, err
 	}
@@ -342,7 +342,7 @@ func (r *GitRepositoryReconciler) gc(repository sourcev1.GitRepository) error {
 }
 
 // event emits a Kubernetes event and forwards the event to notification controller if configured
-func (r *GitRepositoryReconciler) event(repository sourcev1.GitRepository, severity, msg string) {
+func (r *GitRepositoryReconciler) event(repository sourcev1.GitRepository, severity, msg string, meta map[string]string) {
 	if r.EventRecorder != nil {
 		r.EventRecorder.Eventf(&repository, "Normal", severity, msg)
 	}
@@ -356,7 +356,7 @@ func (r *GitRepositoryReconciler) event(repository sourcev1.GitRepository, sever
 			return
 		}
 
-		if err := r.ExternalEventRecorder.Eventf(*objRef, nil, severity, severity, msg); err != nil {
+		if err := r.ExternalEventRecorder.Eventf(*objRef, meta, severity, severity, msg); err != nil {
 			r.Log.WithValues(
 				"request",
 				fmt.Sprintf("%s/%s", repository.GetNamespace(), repository.GetName()),
@@ -399,4 +399,16 @@ func (r *GitRepositoryReconciler) updateStatus(ctx context.Context, req ctrl.Req
 	repository.Status = newStatus
 
 	return r.Status().Patch(ctx, &repository, patch)
+}
+
+func repositoryMetadata(gr sourcev1.GitRepository) map[string]string {
+	meta := map[string]string{
+		"repoURL": gr.Spec.URL,
+	}
+	if gr.Status.Artifact != nil {
+		parts := strings.Split(gr.Status.Artifact.Revision, "/")
+		meta["commit"] = parts[1]
+		meta["branch"] = parts[0]
+	}
+	return meta
 }

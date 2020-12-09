@@ -68,6 +68,7 @@ var _ = Describe("GitRepositoryReconciler", func() {
 			gitServer, err = gittestserver.NewTempGitServer()
 			Expect(err).NotTo(HaveOccurred())
 			gitServer.AutoCreate()
+			externalEventsMock.Reset()
 		})
 
 		AfterEach(func() {
@@ -174,6 +175,14 @@ var _ = Describe("GitRepositoryReconciler", func() {
 			if t.expectRevision != "" {
 				Expect(got.Status.Artifact.Revision).To(Equal(t.expectRevision + "/" + commit.String()))
 			}
+			expectMetadata := map[string]string{
+				"repoURL": got.Spec.URL,
+			}
+			if t.expectStatus == metav1.ConditionTrue {
+				expectMetadata["commit"] = commit.String()
+				expectMetadata["branch"] = t.expectRevision
+			}
+			Expect(externalEventsMock).To(includeMetadata(expectMetadata))
 		},
 			Entry("branch", refTestCase{
 				reference:      &sourcev1.GitRepositoryRef{Branch: "some-branch"},
@@ -264,7 +273,7 @@ var _ = Describe("GitRepositoryReconciler", func() {
 		)
 	})
 
-	Context("repositoryMetadata", func() {
+	Context("gitRepositoryMetadata", func() {
 		const (
 			commit = "1ea9999c2ca070ccf4c9da7c20d68b7645863871"
 			branch = "main"
@@ -282,7 +291,7 @@ var _ = Describe("GitRepositoryReconciler", func() {
 					},
 				},
 			}
-			m := repositoryMetadata(repo)
+			m := gitRepositoryMetadata(repo)
 			Expect(m).To(Equal(map[string]string{
 				"repoURL": "https://github.com/fluxcd/source-controller",
 				"branch":  branch,

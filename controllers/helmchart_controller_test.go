@@ -718,6 +718,7 @@ var _ = Describe("HelmChartReconciler", func() {
 			helmServer, err = helmtestserver.NewTempHelmServer()
 			Expect(err).To(Succeed())
 			helmServer.Start()
+			externalEventsMock.Reset()
 		})
 
 		AfterEach(func() {
@@ -876,7 +877,7 @@ var _ = Describe("HelmChartReconciler", func() {
 			err = ff.Close()
 			Expect(err).NotTo(HaveOccurred())
 
-			_, err = wt.Commit("Helm charts", &git.CommitOptions{
+			commit, err := wt.Commit("Helm charts", &git.CommitOptions{
 				Author: &object.Signature{
 					Name:  "John Doe",
 					Email: "john@example.com",
@@ -935,6 +936,46 @@ var _ = Describe("HelmChartReconciler", func() {
 				return got.Status.Artifact != nil &&
 					storage.ArtifactExist(*got.Status.Artifact)
 			}, timeout, interval).Should(BeTrue())
+
+			expectMetadata := map[string]string{
+				"branch":  "master",
+				"commit":  commit.String(),
+				"repoURL": u.String(),
+			}
+			Expect(externalEventsMock).To(includeMetadata(expectMetadata))
 		})
 	})
+
+	Context("helmChartMetadata", func() {
+		const (
+			commit = "1ea9999c2ca070ccf4c9da7c20d68b7645863871"
+			branch = "main"
+		)
+		It("populates a map from the HelmChart", func() {
+			chart := sourcev1.HelmChart{
+				Spec: sourcev1.HelmChartSpec{
+					Chart:   "helmchart",
+					Version: "0.0.1",
+					SourceRef: sourcev1.LocalHelmChartSourceReference{
+						Kind: sourcev1.HelmRepositoryKind,
+						Name: "my-helm-repository",
+					},
+					Interval: metav1.Duration{Duration: pullInterval},
+				},
+				Status: sourcev1.HelmChartStatus{
+					Artifact: &sourcev1.Artifact{
+						Revision: "0.0.1",
+					},
+				},
+			}
+
+			m := helmChartMetadata(chart)
+			Expect(m).To(Equal(map[string]string{
+				"revision": "0.0.1",
+				"chart":    "helmchart",
+				"version":  "0.0.1",
+			}))
+		})
+	})
+
 })

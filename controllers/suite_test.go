@@ -17,16 +17,20 @@ limitations under the License.
 package controllers
 
 import (
+	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 	"helm.sh/helm/v3/pkg/getter"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,6 +52,7 @@ var k8sClient client.Client
 var k8sManager ctrl.Manager
 var testEnv *envtest.Environment
 var storage *Storage
+var externalEventsMock *mockEventRecorder
 
 var examplePublicKey []byte
 var examplePrivateKey []byte
@@ -105,11 +110,14 @@ var _ = BeforeSuite(func(done Done) {
 	})
 	Expect(err).ToNot(HaveOccurred())
 
+	externalEventsMock = &mockEventRecorder{metadatas: []map[string]string{}}
+
 	err = (&GitRepositoryReconciler{
-		Client:  k8sManager.GetClient(),
-		Log:     ctrl.Log.WithName("controllers").WithName(sourcev1.GitRepositoryKind),
-		Scheme:  scheme.Scheme,
-		Storage: storage,
+		Client:                k8sManager.GetClient(),
+		Log:                   ctrl.Log.WithName("controllers").WithName(sourcev1.GitRepositoryKind),
+		Scheme:                scheme.Scheme,
+		Storage:               storage,
+		ExternalEventRecorder: externalEventsMock,
 	}).SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred(), "failed to setup GtRepositoryReconciler")
 
@@ -183,4 +191,53 @@ func randStringRunes(n int) string {
 		b[i] = letterRunes[rand.Intn(len(letterRunes))]
 	}
 	return string(b)
+}
+
+type mockEventRecorder struct {
+	metadatas []map[string]string
+}
+
+func (m *mockEventRecorder) Eventf(
+	o corev1.ObjectReference,
+	metadata map[string]string,
+	severity, reason string,
+	messageFmt string, args ...interface{}) error {
+	m.metadatas = append(m.metadatas, metadata)
+	return nil
+}
+
+func (m *mockEventRecorder) Reset() {
+	m.metadatas = []map[string]string{}
+}
+
+func includeMetadata(expected map[string]string) types.GomegaMatcher {
+	return &includeMetadataMatcher{
+		expected: expected,
+	}
+}
+
+type includeMetadataMatcher struct {
+	expected map[string]string
+}
+
+func (matcher *includeMetadataMatcher) Match(actual interface{}) (success bool, err error) {
+	recorder, ok := actual.(*mockEventRecorder)
+	if !ok {
+		return false, fmt.Errorf("includeMetadata matcher expects a *mockEventRecorder")
+	}
+
+	for i := range recorder.metadatas {
+		if reflect.DeepEqual(recorder.metadatas[i], matcher.expected) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (matcher *includeMetadataMatcher) FailureMessage(actual interface{}) (message string) {
+	return fmt.Sprintf("Expected\n\t%#v\nto contain Metadata\n\t%#v", actual, matcher.expected)
+}
+
+func (matcher *includeMetadataMatcher) NegatedFailureMessage(actual interface{}) (message string) {
+	return fmt.Sprintf("Expected\n\t%#v\nnot to contain the Metadata\n\t%#v", actual, matcher.expected)
 }

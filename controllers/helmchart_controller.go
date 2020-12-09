@@ -65,7 +65,7 @@ type HelmChartReconciler struct {
 	Storage               *Storage
 	Getters               getter.Providers
 	EventRecorder         kuberecorder.EventRecorder
-	ExternalEventRecorder *events.Recorder
+	ExternalEventRecorder eventRecorder
 	MetricsRecorder       *metrics.Recorder
 }
 
@@ -181,14 +181,14 @@ func (r *HelmChartReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	// If reconciliation failed, record the failure and requeue immediately
 	if reconcileErr != nil {
-		r.event(reconciledChart, events.EventSeverityError, reconcileErr.Error())
+		r.event(reconciledChart, events.EventSeverityError, reconcileErr.Error(), helmChartMetadata(reconciledChart))
 		r.recordReadiness(reconciledChart)
 		return ctrl.Result{Requeue: true}, reconcileErr
 	}
 
 	// Emit an event if we did not have an artifact before, or the revision has changed
 	if chart.Status.Artifact == nil || reconciledChart.Status.Artifact.Revision != chart.Status.Artifact.Revision {
-		r.event(reconciledChart, events.EventSeverityInfo, sourcev1.HelmChartReadyMessage(reconciledChart))
+		r.event(reconciledChart, events.EventSeverityInfo, sourcev1.HelmChartReadyMessage(reconciledChart), helmChartMetadata(reconciledChart))
 	}
 	r.recordReadiness(reconciledChart)
 
@@ -627,7 +627,10 @@ func (r *HelmChartReconciler) reconcileFromTarballArtifact(ctx context.Context,
 func (r *HelmChartReconciler) reconcileDelete(ctx context.Context, chart sourcev1.HelmChart) (ctrl.Result, error) {
 	// Our finalizer is still present, so lets handle garbage collection
 	if err := r.gc(chart); err != nil {
-		r.event(chart, events.EventSeverityError, fmt.Sprintf("garbage collection for deleted resource failed: %s", err.Error()))
+		r.event(
+			chart, events.EventSeverityError,
+			fmt.Sprintf("garbage collection for deleted resource failed: %s", err.Error()),
+			helmChartMetadata(chart))
 		// Return the error so we retry the failed garbage collection
 		return ctrl.Result{}, err
 	}
@@ -677,7 +680,7 @@ func (r *HelmChartReconciler) gc(chart sourcev1.HelmChart) error {
 
 // event emits a Kubernetes event and forwards the event to notification
 // controller if configured.
-func (r *HelmChartReconciler) event(chart sourcev1.HelmChart, severity, msg string) {
+func (r *HelmChartReconciler) event(chart sourcev1.HelmChart, severity, msg string, metadata map[string]string) {
 	if r.EventRecorder != nil {
 		r.EventRecorder.Eventf(&chart, "Normal", severity, msg)
 	}
@@ -691,7 +694,7 @@ func (r *HelmChartReconciler) event(chart sourcev1.HelmChart, severity, msg stri
 			return
 		}
 
-		if err := r.ExternalEventRecorder.Eventf(*objRef, nil, severity, severity, msg); err != nil {
+		if err := r.ExternalEventRecorder.Eventf(*objRef, metadata, severity, severity, msg); err != nil {
 			r.Log.WithValues(
 				"request",
 				fmt.Sprintf("%s/%s", chart.GetNamespace(), chart.GetName()),
@@ -876,4 +879,15 @@ func (r *HelmChartReconciler) requestsForBucketChange(obj handler.MapObject) []r
 		reqs = append(reqs, req)
 	}
 	return reqs
+}
+
+func helmChartMetadata(hc sourcev1.HelmChart) map[string]string {
+	meta := map[string]string{
+		"chart":   hc.Spec.Chart,
+		"version": hc.Spec.Version,
+	}
+	if hc.Status.Artifact != nil {
+		meta["revision"] = hc.Status.Artifact.Revision
+	}
+	return meta
 }

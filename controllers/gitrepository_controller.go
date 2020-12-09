@@ -48,6 +48,15 @@ import (
 	"github.com/fluxcd/source-controller/pkg/git"
 )
 
+type eventRecorder interface {
+	// Eventf constructs an event from the given information
+	// and performs an HTTP POST to the webhook address.
+	Eventf(
+		object corev1.ObjectReference,
+		metadata map[string]string, severity, reason string,
+		messageFmt string, args ...interface{}) error
+}
+
 // GitRepositoryReconciler reconciles a GitRepository object
 type GitRepositoryReconciler struct {
 	client.Client
@@ -55,7 +64,7 @@ type GitRepositoryReconciler struct {
 	Scheme                *runtime.Scheme
 	Storage               *Storage
 	EventRecorder         kuberecorder.EventRecorder
-	ExternalEventRecorder *events.Recorder
+	ExternalEventRecorder eventRecorder
 	MetricsRecorder       *metrics.Recorder
 }
 
@@ -137,14 +146,15 @@ func (r *GitRepositoryReconciler) Reconcile(req ctrl.Request) (ctrl.Result, erro
 
 	// if reconciliation failed, record the failure and requeue immediately
 	if reconcileErr != nil {
-		r.event(reconciledRepository, events.EventSeverityError, reconcileErr.Error(), repositoryMetadata(reconciledRepository))
+		r.event(reconciledRepository, events.EventSeverityError, reconcileErr.Error(), gitRepositoryMetadata(reconciledRepository))
 		r.recordReadiness(reconciledRepository)
 		return ctrl.Result{Requeue: true}, reconcileErr
 	}
 
 	// emit revision change event
 	if repository.Status.Artifact == nil || reconciledRepository.Status.Artifact.Revision != repository.Status.Artifact.Revision {
-		r.event(reconciledRepository, events.EventSeverityInfo, sourcev1.GitRepositoryReadyMessage(reconciledRepository), nil)
+		r.event(reconciledRepository, events.EventSeverityInfo, sourcev1.GitRepositoryReadyMessage(reconciledRepository),
+			gitRepositoryMetadata(reconciledRepository))
 	}
 	r.recordReadiness(reconciledRepository)
 
@@ -401,7 +411,7 @@ func (r *GitRepositoryReconciler) updateStatus(ctx context.Context, req ctrl.Req
 	return r.Status().Patch(ctx, &repository, patch)
 }
 
-func repositoryMetadata(gr sourcev1.GitRepository) map[string]string {
+func gitRepositoryMetadata(gr sourcev1.GitRepository) map[string]string {
 	meta := map[string]string{
 		"repoURL": gr.Spec.URL,
 	}
